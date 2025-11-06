@@ -1,32 +1,41 @@
 {% extends "layout.html" %}
 {% block content %}
-  <h1>All-Time Leaderboard</h1>
-  <div class="table">
-    <div class="thead">
-      <div>#</div>
-      <div>Name</div>
-      <div>Amount</div>
-      <div>Held</div>
-      <div>Start</div>
-      <div>End</div>
-    </div>
-    {% for row in top %}
-      {% set c = row[0] %}
-      {% set secs = row[1] %}
-      <div class="trow">
-        <div>{{ loop.index }}</div>
-        <div>{{ c.name }}</div>
-        <div>{{ c.amount_cents|usd }}</div>
-        <div>{{ secs|duration }}</div>
-        <div>{{ c.start_time.strftime("%Y-%m-%d %H:%M:%S %Z") }}</div>
-        <div>
-          {% if c.end_time %}
-            {{ c.end_time.strftime("%Y-%m-%d %H:%M:%S %Z") }}
-          {% else %}
-            —
-          {% endif %}
-        </div>
-      </div>
-    {% endfor %}
+<div class="container mt-4">
+  <h1 class="text-center mb-4">🏆 Penny Celebrity Leaderboard</h1>
+  <p class="text-center text-muted">
+    The top celebrities who have held the spotlight the longest.
+  </p>
+
+  {% if top and top|length > 0 %}
+  <table class="table table-striped table-bordered mt-4">
+    <thead class="table-light">
+      <tr>
+        <th scope="col" style="width: 5%">#</th>
+        <th scope="col" style="width: 25%">Name</th>
+        <th scope="col" style="width: 20%">Amount Paid</th>
+        <th scope="col" style="width: 25%">Start Time (UTC)</th>
+        <th scope="col" style="width: 25%">End Time (UTC)</th>
+        <th scope="col" style="width: 15%">Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c, dur in top %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ c.name }}</td>
+        <td>{{ c.amount_cents|usd }}</td>
+        <td>{{ c.start_time|fmtdt }}</td>
+        <td>{{ c.end_time|fmtdt }}</td>
+        <td>{{ dur|duration }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="text-center text-muted mt-5">
+    <p>No celebrities yet — be the first to claim your fame!</p>
+    <a href="{{ url_for('claim') }}" class="btn btn-primary">Become the Celebrity</a>
   </div>
+  {% endif %}
+</div>
 {% endblock %}
