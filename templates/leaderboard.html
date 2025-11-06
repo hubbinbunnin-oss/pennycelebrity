@@ -1,0 +1,32 @@
+{% extends "layout.html" %}
+{% block content %}
+  <h1>All-Time Leaderboard</h1>
+  <div class="table">
+    <div class="thead">
+      <div>#</div>
+      <div>Name</div>
+      <div>Amount</div>
+      <div>Held</div>
+      <div>Start</div>
+      <div>End</div>
+    </div>
+    {% for row in top %}
+      {% set c = row[0] %}
+      {% set secs = row[1] %}
+      <div class="trow">
+        <div>{{ loop.index }}</div>
+        <div>{{ c.name }}</div>
+        <div>{{ c.amount_cents|usd }}</div>
+        <div>{{ secs|duration }}</div>
+        <div>{{ c.start_time.strftime("%Y-%m-%d %H:%M:%S %Z") }}</div>
+        <div>
+          {% if c.end_time %}
+            {{ c.end_time.strftime("%Y-%m-%d %H:%M:%S %Z") }}
+          {% else %}
+            —
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% endblock %}

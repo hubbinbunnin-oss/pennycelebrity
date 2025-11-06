@@ -1,0 +1,49 @@
+{% extends "layout.html" %}
+{% block content %}
+  <section class="hero">
+    <h1>The Current Penny Celebrity</h1>
+    {% if current %}
+      <div class="card current">
+        <div class="name">{{ current.name }}</div>
+        <div class="since">
+          Holding since: <span id="since">{{ current.start_time.isoformat() }}</span>
+        </div>
+        <div class="timer">Time on top: <span id="elapsed">0s</span></div>
+      </div>
+    {% else %}
+      <div class="card current">
+        <div class="name">No one yet — be the first!</div>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="cta">
+    <h2>Take the crown for {{ next_amount_cents|usd }}</h2>
+    <a class="btn" href="/claim">Become the Penny Celebrity</a>
+  </section>
+
+  <script>
+    // Live timer
+    (function(){
+      const sinceEl = document.getElementById('since');
+      const elapsedEl = document.getElementById('elapsed');
+      if (!sinceEl || !elapsedEl) return;
+      const started = new Date(sinceEl.textContent);
+      function fmt(s){
+        const h = Math.floor(s/3600);
+        const m = Math.floor((s%3600)/60);
+        const sec = s%60;
+        if (h) return `${h}h ${m}m ${sec}s`;
+        if (m) return `${m}m ${sec}s`;
+        return `${sec}s`;
+      }
+      function tick(){
+        const now = new Date();
+        const diff = Math.max(0, Math.floor((now - started)/1000));
+        elapsedEl.textContent = fmt(diff);
+      }
+      tick();
+      setInterval(tick, 1000);
+    })();
+  </script>
+{% endblock %}

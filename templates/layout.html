@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Penny Celebrity</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <a href="/" class="brand">Penny Celebrity</a>
+      <nav>
+        <a href="/">Home</a>
+        <a href="/claim">Become the Celebrity</a>
+        <a href="/leaderboard">Leaderboard</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>&copy; {{ (now()|default("")) }} Penny Celebrity. Be nice — names with obvious slurs get censored.</p>
+    </div>
+  </footer>
+</body>
+</html>

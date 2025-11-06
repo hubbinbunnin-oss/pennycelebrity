@@ -1,0 +1,11 @@
+{% extends "layout.html" %}
+{% block content %}
+  <h1>Claim the Spotlight</h1>
+  <p>Pay exactly {{ next_amount_cents|usd }} to take the top spot. The price then increases by one cent for the next challenger.</p>
+  <form class="card form" action="/create-checkout-session" method="POST">
+    <label for="name">Your display name (max 40 chars). Obvious slurs will be censored.</label>
+    <input id="name" name="name" type="text" maxlength="40" placeholder="e.g., Penny Champ" required />
+    <button class="btn" type="submit">Checkout ({{ next_amount_cents|usd }})</button>
+  </form>
+  <p class="note">We use Stripe Checkout. If two people pay at the same time, only one will win — the other will be automatically refunded.</p>
+{% endblock %}
