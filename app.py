@@ -49,7 +49,8 @@ class Base(DeclarativeBase):
 class Settings(Base):
     __tablename__ = "settings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    next_amount_cents: Mapped[int] = mapped_column(Integer, default=1)  # starts at 1 cent
+    next_amount_cents: Mapped[int] = mapped_column(Integer, default=50)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 class Celebrity(Base):
@@ -69,11 +70,16 @@ Base.metadata.create_all(engine)
 def get_or_create_settings(sess: Session) -> Settings:
     s = sess.get(Settings, 1)
     if not s:
-        s = Settings(id=1, next_amount_cents=1)
+        s = Settings(id=1, next_amount_cents=50)
         sess.add(s)
         sess.commit()
         sess.refresh(s)
+    # Enforce Stripe minimum (USD $0.50)
+    if s.next_amount_cents < 50:
+        s.next_amount_cents = 50
+        sess.commit()
     return s
+
 
 # --- Helpers ---
 def now_utc():
