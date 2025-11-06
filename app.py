@@ -24,6 +24,13 @@ stripe.api_key = STRIPE_SECRET_KEY
 
 app = Flask(__name__)
 
+@app.context_processor
+def inject_current_year():
+    from datetime import datetime
+    return {"current_year": datetime.utcnow().year}
+
+
+
 if FORCE_HTTPS:
     # Trust proxy headers for correct url_for with _external
     from werkzeug.middleware.proxy_fix import ProxyFix
