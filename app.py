@@ -3,9 +3,8 @@ import time
 import stripe
 from datetime import datetime, timezone
 from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
-from sqlalchemy import create_engine, Integer, String, DateTime, Text, func, select, update
+from sqlalchemy import create_engine, Integer, String, DateTime, Text, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
-from sqlalchemy.exc import IntegrityError
 from dotenv import load_dotenv
 from moderation import sanitize_name
 
@@ -24,12 +23,10 @@ stripe.api_key = STRIPE_SECRET_KEY
 
 app = Flask(__name__)
 
+# Show current year in templates (e.g., footer)
 @app.context_processor
 def inject_current_year():
-    from datetime import datetime
     return {"current_year": datetime.utcnow().year}
-
-
 
 if FORCE_HTTPS:
     # Trust proxy headers for correct url_for with _external
@@ -49,16 +46,20 @@ class Base(DeclarativeBase):
 class Settings(Base):
     __tablename__ = "settings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Stripe minimum is $0.50 -> 50 cents
     next_amount_cents: Mapped[int] = mapped_column(Integer, default=50)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
 
 class Celebrity(Base):
     __tablename__ = "celebrities"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(80))
     amount_cents: Mapped[int] = mapped_column(Integer)
-    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    start_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stripe_payment_intent: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(40), default="succeeded")  # or refunded
@@ -80,7 +81,6 @@ def get_or_create_settings(sess: Session) -> Settings:
         sess.commit()
     return s
 
-
 # --- Helpers ---
 def now_utc():
     return datetime.now(timezone.utc)
@@ -94,28 +94,35 @@ def index():
         current = sess.execute(
             select(Celebrity).where(Celebrity.end_time.is_(None)).order_by(Celebrity.start_time.desc())
         ).scalars().first()
-        return render_template("index.html",
-                               publishable_key=STRIPE_PUBLISHABLE_KEY,
-                               next_amount_cents=s.next_amount_cents,
-                               current=current,
-                               site_url=SITE_URL)
+        return render_template(
+            "index.html",
+            publishable_key=STRIPE_PUBLISHABLE_KEY,
+            next_amount_cents=s.next_amount_cents,
+            current=current,
+            site_url=SITE_URL,
+        )
 
 @app.get("/leaderboard")
 def leaderboard():
     with Session(engine) as sess:
-        # Calculate durations; if end_time is NULL, use now
         celebs = sess.execute(
             select(Celebrity).order_by(Celebrity.start_time.desc())
         ).scalars().all()
 
-        # compute duration seconds for sort
         rows = []
         n = now_utc()
         for c in celebs:
-            end = c.end_time or n
-            duration_s = int((end - c.start_time).total_seconds())
+            # Defensive: handle any weird/missing timestamps gracefully
+            if not c.start_time:
+                duration_s = 0
+            else:
+                end = c.end_time or n
+                try:
+                    duration_s = max(0, int((end - c.start_time).total_seconds()))
+                except Exception:
+                    duration_s = 0
             rows.append((c, duration_s))
-        # sort by duration desc
+
         rows.sort(key=lambda t: t[1], reverse=True)
         top = rows[:50]
         return render_template("leaderboard.html", top=top)
@@ -134,9 +141,9 @@ def create_checkout_session():
     with Session(engine) as sess:
         s = get_or_create_settings(sess)
         amount_cents = s.next_amount_cents  # snapshot
-    # Create Stripe Checkout Session with dynamic price
+
     try:
-        session = stripe.checkout.Session.create(
+        session_obj = stripe.checkout.Session.create(
             mode="payment",
             payment_method_types=["card"],
             line_items=[{
@@ -156,7 +163,7 @@ def create_checkout_session():
             cancel_url=f"{SITE_URL}/cancel",
             allow_promotion_codes=False,
         )
-        return redirect(session.url, code=303)
+        return redirect(session_obj.url, code=303)
     except Exception as e:
         return jsonify(error=str(e)), 400
 
@@ -190,21 +197,18 @@ def webhook():
         meta = sess_obj.get("metadata", {}) or {}
         raw_name = meta.get("raw_name", "") or ""
         display_name = meta.get("display_name", "") or "Anonymous"
-        expected_amount = int(meta.get("expected_amount_cents") or 0)
 
         # Double-check payment intent status
         pi = stripe.PaymentIntent.retrieve(payment_intent_id)
         if pi.status != "succeeded":
-            # ignore non-succeeded
             return "ignored", 200
 
-        # Transaction: compare-and-swap the price
         with Session(engine) as sess:
             s = get_or_create_settings(sess)
             current_required = s.next_amount_cents
 
             if amount_total != current_required:
-                # Amount mismatch -> refund
+                # Amount mismatch -> refund (race condition)
                 stripe.Refund.create(payment_intent=payment_intent_id)
                 sess.commit()
                 return "refunded due to race", 200
@@ -223,9 +227,10 @@ def webhook():
                 amount_cents=amount_total,
                 start_time=now_utc(),
                 stripe_payment_intent=payment_intent_id,
-                status="succeeded"
+                status="succeeded",
             )
             sess.add(c)
+
             # Increment next price by 1 cent
             s.next_amount_cents = current_required + 1
 
@@ -234,9 +239,20 @@ def webhook():
 
     return "ignored", 200
 
+# --- Template filters ---
 @app.template_filter("usd")
 def usd(cents: int):
     return f"${cents/100:.2f}"
+
+@app.template_filter("fmtdt")
+def fmtdt(dt):
+    """Safe datetime -> 'YYYY-MM-DD HH:MM:SS UTC' (or '—' if missing)."""
+    if not dt:
+        return "—"
+    try:
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    except Exception:
+        return str(dt)
 
 @app.template_filter("duration")
 def duration(seconds: int):
