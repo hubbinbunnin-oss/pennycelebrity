@@ -1,12 +1,11 @@
 import os
-import time
 import stripe
 from datetime import datetime, timezone
-from flask import Flask, render_template, request, redirect, url_for, jsonify, abort
+from flask import Flask, render_template, request, redirect, jsonify, abort
 from sqlalchemy import create_engine, Integer, String, DateTime, Text, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
 from dotenv import load_dotenv
-from moderation import moderate_name
+from moderation import sanitize_name
 
 load_dotenv()
 
@@ -23,21 +22,19 @@ stripe.api_key = STRIPE_SECRET_KEY
 
 app = Flask(__name__)
 
-# Show current year in templates (e.g., footer)
+# Inject current year for footer
 @app.context_processor
 def inject_current_year():
     return {"current_year": datetime.utcnow().year}
 
 if FORCE_HTTPS:
-    # Trust proxy headers for correct url_for with _external
     from werkzeug.middleware.proxy_fix import ProxyFix
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
-    app.config.update(
-        SESSION_COOKIE_SECURE=True,
-        PREFERRED_URL_SCHEME="https",
-    )
+    app.config.update(SESSION_COOKIE_SECURE=True, PREFERRED_URL_SCHEME="https")
 
-# --- Database setup ---
+# --------------------------
+# Database
+# --------------------------
 DB_URL = "sqlite:///pennycelebrity.db"
 
 class Base(DeclarativeBase):
@@ -46,7 +43,7 @@ class Base(DeclarativeBase):
 class Settings(Base):
     __tablename__ = "settings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    # Stripe minimum is $0.50 -> 50 cents
+    # Stripe minimum $0.50 -> 50 cents
     next_amount_cents: Mapped[int] = mapped_column(Integer, default=50)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -81,19 +78,25 @@ def get_or_create_settings(sess: Session) -> Settings:
         sess.commit()
     return s
 
-# --- Helpers ---
-def now_utc():
+def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
-# --- Routes ---
+# --------------------------
+# Routes
+# --------------------------
 @app.get("/")
 def index():
     with Session(engine) as sess:
         s = get_or_create_settings(sess)
-        # current celeb = most recent with end_time is NULL
-        current = sess.execute(
-            select(Celebrity).where(Celebrity.end_time.is_(None)).order_by(Celebrity.start_time.desc())
-        ).scalars().first()
+        current = (
+            sess.execute(
+                select(Celebrity)
+                .where(Celebrity.end_time.is_(None))
+                .order_by(Celebrity.start_time.desc())
+            )
+            .scalars()
+            .first()
+        )
         return render_template(
             "index.html",
             publishable_key=STRIPE_PUBLISHABLE_KEY,
@@ -105,14 +108,15 @@ def index():
 @app.get("/leaderboard")
 def leaderboard():
     with Session(engine) as sess:
-        celebs = sess.execute(
-            select(Celebrity).order_by(Celebrity.start_time.desc())
-        ).scalars().all()
+        celebs = (
+            sess.execute(select(Celebrity).order_by(Celebrity.start_time.desc()))
+            .scalars()
+            .all()
+        )
 
         rows = []
         n = now_utc()
         for c in celebs:
-            # Defensive: handle any weird/missing timestamps gracefully
             if not c.start_time:
                 duration_s = 0
             else:
@@ -131,15 +135,16 @@ def leaderboard():
 def claim():
     with Session(engine) as sess:
         s = get_or_create_settings(sess)
-        return render_template("claim.html", next_amount_cents=s.next_amount_cents, publishable_key=STRIPE_PUBLISHABLE_KEY)
+        return render_template(
+            "claim.html",
+            next_amount_cents=s.next_amount_cents,
+            publishable_key=STRIPE_PUBLISHABLE_KEY,
+        )
 
 @app.post("/create-checkout-session")
 def create_checkout_session():
- raw_name = request.form.get("name", "").strip()
-allowed, reason, clean = moderate_name(raw_name)
-if not allowed:
-    return jsonify({"error": f"That name isn’t allowed ({reason})."}), 400
-
+    raw_name = request.form.get("name", "").strip()
+    sanitized = sanitize_name(raw_name)
 
     with Session(engine) as sess:
         s = get_or_create_settings(sess)
@@ -149,16 +154,18 @@ if not allowed:
         session_obj = stripe.checkout.Session.create(
             mode="payment",
             payment_method_types=["card"],
-            line_items=[{
-                "price_data": {
-                    "currency": "usd",
-                    "product_data": {"name": "Penny Celebrity Claim"},
-                    "unit_amount": amount_cents,
-                },
-                "quantity": 1,
-            }],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "usd",
+                        "product_data": {"name": "Penny Celebrity Claim"},
+                        "unit_amount": amount_cents,
+                    },
+                    "quantity": 1,
+                }
+            ],
             metadata={
-                "display_name": clean,
+                "display_name": sanitized,
                 "raw_name": raw_name,
                 "expected_amount_cents": str(amount_cents),
             },
@@ -193,17 +200,13 @@ def webhook():
     except Exception as e:
         return str(e), 400
 
-    if event["type"] == "checkout.session.completed":
+    if event.get("type") == "checkout.session.completed":
         sess_obj = event["data"]["object"]
         payment_intent_id = sess_obj.get("payment_intent")
         amount_total = sess_obj.get("amount_total")
         meta = sess_obj.get("metadata", {}) or {}
         raw_name = meta.get("raw_name", "") or ""
-       display_name = meta.get("display_name", "") or "Anonymous"
-# double-check name safety
-ok, _, cleaned = moderate_name(display_name)
-display_name = cleaned if ok else "Anonymous"
-
+        display_name = meta.get("display_name", "") or "Anonymous"
 
         # Double-check payment intent status
         pi = stripe.PaymentIntent.retrieve(payment_intent_id)
@@ -221,9 +224,15 @@ display_name = cleaned if ok else "Anonymous"
                 return "refunded due to race", 200
 
             # Close current celeb (if any)
-            current = sess.execute(
-                select(Celebrity).where(Celebrity.end_time.is_(None)).order_by(Celebrity.start_time.desc())
-            ).scalars().first()
+            current = (
+                sess.execute(
+                    select(Celebrity)
+                    .where(Celebrity.end_time.is_(None))
+                    .order_by(Celebrity.start_time.desc())
+                )
+                .scalars()
+                .first()
+            )
             if current:
                 current.end_time = now_utc()
 
@@ -246,7 +255,9 @@ display_name = cleaned if ok else "Anonymous"
 
     return "ignored", 200
 
-# --- Template filters ---
+# --------------------------
+# Template filters
+# --------------------------
 @app.template_filter("usd")
 def usd(cents: int):
     return f"${cents/100:.2f}"
@@ -263,7 +274,6 @@ def fmtdt(dt):
 
 @app.template_filter("duration")
 def duration(seconds: int):
-    # HH:MM:SS
     h = seconds // 3600
     m = (seconds % 3600) // 60
     s = seconds % 60
