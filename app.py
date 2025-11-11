@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, a
 from sqlalchemy import create_engine, Integer, String, DateTime, Text, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
 from dotenv import load_dotenv
-from moderation import sanitize_name
+from moderation import moderate_name
 
 load_dotenv()
 
@@ -135,8 +135,11 @@ def claim():
 
 @app.post("/create-checkout-session")
 def create_checkout_session():
-    raw_name = request.form.get("name", "").strip()
-    sanitized = sanitize_name(raw_name)
+ raw_name = request.form.get("name", "").strip()
+allowed, reason, clean = moderate_name(raw_name)
+if not allowed:
+    return jsonify({"error": f"That name isn’t allowed ({reason})."}), 400
+
 
     with Session(engine) as sess:
         s = get_or_create_settings(sess)
@@ -155,7 +158,7 @@ def create_checkout_session():
                 "quantity": 1,
             }],
             metadata={
-                "display_name": sanitized,
+                "display_name": clean,
                 "raw_name": raw_name,
                 "expected_amount_cents": str(amount_cents),
             },
@@ -196,7 +199,11 @@ def webhook():
         amount_total = sess_obj.get("amount_total")
         meta = sess_obj.get("metadata", {}) or {}
         raw_name = meta.get("raw_name", "") or ""
-        display_name = meta.get("display_name", "") or "Anonymous"
+       display_name = meta.get("display_name", "") or "Anonymous"
+# double-check name safety
+ok, _, cleaned = moderate_name(display_name)
+display_name = cleaned if ok else "Anonymous"
+
 
         # Double-check payment intent status
         pi = stripe.PaymentIntent.retrieve(payment_intent_id)
