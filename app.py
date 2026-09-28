@@ -40,7 +40,13 @@ if FORCE_HTTPS:
     )
 
 # --- Database setup ---
-DB_URL = "sqlite:///pennycelebrity.db"
+# DB_PATH points at a plain file path, not a sqlite:// URL, so it's an easy
+# thing to set in Render's dashboard: point it at your attached disk's mount
+# path (e.g. /var/data/pennycelebrity.db) and the database survives redeploys.
+# Left unset, it falls back to a file in the working directory, which is fine
+# for local development but is NOT persistent on Render without a disk.
+DB_PATH = os.getenv("DB_PATH", "pennycelebrity.db")
+DB_URL = f"sqlite:///{DB_PATH}"
 
 class Base(DeclarativeBase):
     pass
