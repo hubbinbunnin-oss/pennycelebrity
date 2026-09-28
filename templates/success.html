@@ -1,7 +1,12 @@
 {% extends "layout.html" %}
 {% block content %}
-  <h1>Success 🎉</h1>
-  <p>If your payment was the latest at the current price, you are now the Penny Celebrity! This can take a few seconds to reflect on the homepage.</p>
-  <a class="btn" href="/">Go to Homepage</a>
-  <a class="btn ghost" href="/leaderboard">View Leaderboard</a>
+  <div class="card center">
+    <span class="eyebrow-top">Payment received</span>
+    <h1>You're in the spotlight 🎉</h1>
+    <p>If your payment landed at the current price, you're now the Penny Celebrity! It can take a few seconds to show up on the homepage.</p>
+    <div>
+      <a class="btn" href="/">Go to Homepage</a>
+      <a class="btn ghost" href="/leaderboard">View Leaderboard</a>
+    </div>
+  </div>
 {% endblock %}
