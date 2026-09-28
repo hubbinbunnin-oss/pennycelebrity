@@ -1,0 +1,5 @@
+flask==3.0.3
+python-dotenv==1.0.1
+SQLAlchemy==2.0.35
+stripe==10.7.0
+gunicorn==22.0.0
