@@ -158,23 +158,50 @@ def index():
 @app.get("/leaderboard")
 def leaderboard():
     with Session(engine) as sess:
-        # Calculate durations; if end_time is NULL, use now
+        # Oldest first, so that as we fold reigns together below, the last
+        # write for a given identity is their most recent display name.
         celebs = sess.execute(
-            select(Celebrity).order_by(Celebrity.start_time.desc())
+            select(Celebrity).order_by(Celebrity.start_time.asc())
         ).scalars().all()
 
-        # compute duration seconds for sort
-        rows = []
+        # A person can win, get dethroned, and win again later. Those are
+        # separate rows in the DB (one per reign, which keeps the payment
+        # history intact) but should read as ONE entry on the leaderboard
+        # with their held time added together. There's no login system, so
+        # "the same person" here just means "typed the same display name" —
+        # two different people using an identical name will be folded
+        # together too; that's an accepted limitation, not a bug.
         n = now_utc()
+        grouped = {}
         for c in celebs:
             c.start_time = as_utc(c.start_time)
             c.end_time = as_utc(c.end_time)
             end = c.end_time or n
             duration_s = int((end - c.start_time).total_seconds())
-            rows.append((c, duration_s))
-        # sort by duration desc
-        rows.sort(key=lambda t: t[1], reverse=True)
-        top = rows[:50]
+
+            key = c.name.strip().casefold()
+            g = grouped.get(key)
+            if g is None:
+                g = {
+                    "name": c.name,
+                    "total_seconds": 0,
+                    "reigns": 0,
+                    "total_paid_cents": 0,
+                    "first_start": c.start_time,
+                    "is_active": False,
+                }
+                grouped[key] = g
+
+            g["name"] = c.name  # most recent casing/spelling wins for display
+            g["total_seconds"] += duration_s
+            g["reigns"] += 1
+            g["total_paid_cents"] += c.amount_cents
+            if c.start_time < g["first_start"]:
+                g["first_start"] = c.start_time
+            if c.end_time is None:
+                g["is_active"] = True
+
+        top = sorted(grouped.values(), key=lambda g: g["total_seconds"], reverse=True)[:50]
         return render_template("leaderboard.html", top=top)
 
 @app.get("/claim")
