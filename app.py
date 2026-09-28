@@ -97,7 +97,6 @@ def get_or_create_settings(sess: Session) -> Settings:
         sess.refresh(s)
     return s
 
-
 # --- Helpers ---
 def now_utc():
     return datetime.now(timezone.utc)
