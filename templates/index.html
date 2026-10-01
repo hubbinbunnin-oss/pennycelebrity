@@ -1,4 +1,9 @@
 {% extends "layout.html" %}
+
+{% block title %}{% if current %}{{ current.name }} is the Penny Celebrity — steal it for {{ next_amount_cents|usd }}{% else %}Be the first Penny Celebrity — claim it for {{ next_amount_cents|usd }}{% endif %}{% endblock %}
+{% block og_title %}{{ self.title() }}{% endblock %}
+{% block og_description %}{% if current %}{{ current.name }} is currently holding the spotlight. Pay one cent more than the last person to steal it.{% else %}Nobody's claimed the spotlight yet. Pay one cent more than the last person to become the Penny Celebrity.{% endif %}{% endblock %}
+
 {% block content %}
   <section class="hero">
     <span class="eyebrow-top">👑 Currently Holding the Spotlight</span>
@@ -23,11 +28,32 @@
   <section class="cta" id="claim">
     <h2>Take the crown for <span class="price" id="ctaPrice">{{ next_amount_cents|usd }}</span></h2>
     <p>One cent more than the last person. That's the whole game.</p>
+    {% if locked %}
+      <div class="lock-box">
+        🔒 The current champion paid the $20 ceiling and is protected — no one can claim the spotlight
+        until <span id="lockCountdown" data-iso="{{ lock_deadline.isoformat() }}">—</span>.
+      </div>
+    {% elif reset_deadline %}
+      <p class="hint countdown">⏳ Resets to $0.50 in <span id="resetCountdown" data-iso="{{ reset_deadline.isoformat() }}">—</span> unless someone claims first</p>
+    {% else %}
+      <p class="hint">Price resets to $0.50 once it passes $20 — or after 48 hours with no challenger.</p>
+    {% endif %}
+
+    {% if at_ceiling and not locked %}
+      <div class="warning-box">
+        👑 This is the top price — and it pays off. Claiming it makes you a <strong>Round Champion</strong>,
+        permanently listed on the Hall of Fame, and guarantees you {{ champion_hold_minutes }} minutes as the
+        protected spotlight holder — nobody can dethrone you until then. After that, the price drops back
+        to $0.50 for the next challenger.
+      </div>
+    {% endif %}
 
     <form class="card form" action="/create-checkout-session" method="POST">
       <label for="name">Your display name <span class="hint">(max 40 chars)</span></label>
-      <input id="name" name="name" type="text" maxlength="40" placeholder="e.g., Penny Champ" required autocomplete="off" />
-      <button class="btn" type="submit">Checkout for {{ next_amount_cents|usd }} →</button>
+      <input id="name" name="name" type="text" maxlength="40" placeholder="e.g., Penny Champ" required autocomplete="off" {% if locked %}disabled{% endif %} />
+      <button class="btn" type="submit" {% if locked %}disabled{% endif %}>
+        {% if locked %}Champion is protected{% else %}Checkout for {{ next_amount_cents|usd }} →{% endif %}
+      </button>
     </form>
 
     <p class="note">🔒 Payments run through Stripe Checkout. If two people pay at the same instant, only one wins — the other is refunded automatically.</p>
@@ -52,6 +78,64 @@
         const now = new Date();
         const diff = Math.max(0, Math.floor((now - started)/1000));
         elapsedEl.textContent = fmt(diff);
+      }
+      tick();
+      setInterval(tick, 1000);
+    })();
+
+    // Live countdown to the inactivity reset.
+    (function(){
+      const el = document.getElementById('resetCountdown');
+      if (!el) return;
+      const deadline = new Date(el.dataset.iso);
+      function fmt(totalSeconds){
+        const d = Math.floor(totalSeconds / 86400);
+        const h = Math.floor((totalSeconds % 86400) / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = totalSeconds % 60;
+        if (d) return `${d}d ${h}h ${m}m`;
+        if (h) return `${h}h ${m}m ${s}s`;
+        if (m) return `${m}m ${s}s`;
+        return `${s}s`;
+      }
+      function tick(){
+        const diff = Math.floor((deadline - new Date()) / 1000);
+        if (diff <= 0) {
+          // The actual reset only happens server-side on the next page
+          // load past the deadline, so the price shown here may now be
+          // stale — say so instead of showing a confusing negative timer.
+          el.textContent = 'any moment — refresh to check';
+          return;
+        }
+        el.textContent = fmt(diff);
+      }
+      tick();
+      setInterval(tick, 1000);
+    })();
+
+    // Live countdown until the current Round Champion's protected hold ends.
+    (function(){
+      const el = document.getElementById('lockCountdown');
+      if (!el) return;
+      const deadline = new Date(el.dataset.iso);
+      function fmt(totalSeconds){
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = totalSeconds % 60;
+        if (h) return `${h}h ${m}m ${s}s`;
+        if (m) return `${m}m ${s}s`;
+        return `${s}s`;
+      }
+      function tick(){
+        const diff = Math.floor((deadline - new Date()) / 1000);
+        if (diff <= 0) {
+          // The actual unlock only takes effect server-side on the next
+          // page load past the deadline, so the disabled form above may
+          // now be stale — say so instead of showing a negative timer.
+          el.textContent = 'any moment — refresh to check';
+          return;
+        }
+        el.textContent = fmt(diff);
       }
       tick();
       setInterval(tick, 1000);
