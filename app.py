@@ -198,6 +198,20 @@ def _is_rate_limited(client_ip: str) -> bool:
         _last_checkout_request[client_ip] = now_ts
     return False
 
+# In-process cache for the generated OG image (see generate_og_image below).
+# Rendering it is the single most CPU-heavy thing this app does, and once a
+# link starts spreading, every platform's link-preview crawler (Twitter,
+# Facebook, Slack, Discord...) fetches it independently and ignores the
+# Cache-Control header below, since that's a hint for browsers, not crawlers.
+# This cache means that burst of hits regenerates the image at most once per
+# worker process per OG_IMAGE_CACHE_SECONDS, instead of once per hit. It's
+# per-process (not shared across gunicorn's workers), so with 2 workers the
+# image can still be regenerated up to twice per window — a small cost worth
+# paying rather than adding a cross-process cache for a gag site's traffic.
+_og_cache = {"bytes": None, "expires_at": 0.0}
+_og_cache_lock = threading.Lock()
+OG_IMAGE_CACHE_SECONDS = 30
+
 # --- Social share image (Open Graph) ---
 # Fonts are bundled in static/fonts/ (DejaVu, permissively licensed and
 # redistributable) rather than relying on whatever fonts happen to be
@@ -372,32 +386,45 @@ def og_image():
     # whatever — shows a live preview of who currently holds the spotlight
     # and what it costs to take it. That preview card is what actually
     # gets a shared link clicked on social platforms.
-    with Session(engine) as sess:
-        s = get_or_create_settings(sess)
-        current = sess.execute(
-            select(Celebrity).where(Celebrity.end_time.is_(None)).order_by(Celebrity.start_time.desc())
-        ).scalars().first()
-        lock_until = as_utc(s.champion_lock_until)
-        locked = lock_until is not None and now_utc() < lock_until
-
-        if current:
-            headline = current.name
-            if locked:
-                eyebrow = "Protected Round Champion"
-                subline = f"Paid {usd(current.amount_cents)} to win"
-            else:
-                eyebrow = "Currently holding the spotlight"
-                subline = f"Steal it for {usd(s.next_amount_cents)}"
+    now_ts = time.time()
+    with _og_cache_lock:
+        if _og_cache["bytes"] is not None and now_ts < _og_cache["expires_at"]:
+            png_bytes = _og_cache["bytes"]
         else:
-            headline = "No one yet"
-            eyebrow = "Be the first Penny Celebrity"
-            subline = f"Claim it for {usd(s.next_amount_cents)}"
+            png_bytes = None
 
-    png_bytes = generate_og_image(headline, eyebrow, subline)
+    if png_bytes is None:
+        with Session(engine) as sess:
+            s = get_or_create_settings(sess)
+            current = sess.execute(
+                select(Celebrity).where(Celebrity.end_time.is_(None)).order_by(Celebrity.start_time.desc())
+            ).scalars().first()
+            lock_until = as_utc(s.champion_lock_until)
+            locked = lock_until is not None and now_utc() < lock_until
+
+            if current:
+                headline = current.name
+                if locked:
+                    eyebrow = "Protected Round Champion"
+                    subline = f"Paid {usd(current.amount_cents)} to win"
+                else:
+                    eyebrow = "Currently holding the spotlight"
+                    subline = f"Steal it for {usd(s.next_amount_cents)}"
+            else:
+                headline = "No one yet"
+                eyebrow = "Be the first Penny Celebrity"
+                subline = f"Claim it for {usd(s.next_amount_cents)}"
+
+        png_bytes = generate_og_image(headline, eyebrow, subline)
+        with _og_cache_lock:
+            _og_cache["bytes"] = png_bytes
+            _og_cache["expires_at"] = time.time() + OG_IMAGE_CACHE_SECONDS
+
     resp = app.response_class(png_bytes, mimetype="image/png")
-    # Short cache: keeps the preview fresh (this is a live leaderboard) but
-    # avoids regenerating the image on every single crawler hit.
-    resp.headers["Cache-Control"] = "public, max-age=60"
+    # Keeps the preview fresh (this is a live leaderboard) but avoids
+    # regenerating the image on every single crawler hit — see the
+    # in-process cache above, which does the actual work of that.
+    resp.headers["Cache-Control"] = f"public, max-age={OG_IMAGE_CACHE_SECONDS}"
     return resp
 
 @app.get("/claim")
