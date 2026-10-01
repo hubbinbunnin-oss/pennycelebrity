@@ -1,4 +1,9 @@
 {% extends "layout.html" %}
+
+{% block title %}All-Time Penny Celebrity Leaderboard{% endblock %}
+{% block og_title %}{{ self.title() }}{% endblock %}
+{% block og_description %}Who's held the spotlight the longest, and who's paid the full $20 to close out a round. Live leaderboard.{% endblock %}
+
 {% block content %}
   <span class="eyebrow-top">Hall of fame</span>
   <h1>All-Time Leaderboard</h1>
@@ -17,7 +22,10 @@
     {% for g in top %}
       <div class="trow">
         <div class="rank">{{ loop.index }}</div>
-        <div class="name">{{ g.name }}{% if g.is_active %} 👑{% endif %}</div>
+        <div class="name">
+          {{ g.name }}{% if g.is_active %} 👑{% endif %}
+          {% if g.champion_reigns %}<span class="champion-badge" title="Closed {{ g.champion_reigns }} round(s) at the $20 ceiling">💰</span>{% endif %}
+        </div>
         <div>{{ g.reigns }}</div>
         <div class="amount">{{ g.total_paid_cents|usd }}</div>
         <div class="held">{{ g.total_seconds|duration }}</div>
@@ -30,4 +38,33 @@
       <p>No one has claimed the spotlight yet. <a href="/#claim">Be the first legend →</a></p>
     </div>
   {% endif %}
+
+  <section class="champions-section">
+    <span class="eyebrow-top">Paid the ceiling price</span>
+    <h2>👑 Round Champions</h2>
+    <p>Everyone who paid the full $20 to close out a round — earning {{ champion_hold_minutes }} guaranteed minutes as the protected spotlight holder for it.</p>
+
+    {% if champions %}
+      <div class="table champions-table">
+        <div class="thead">
+          <div>#</div>
+          <div>Name</div>
+          <div>Paid</div>
+          <div>Date</div>
+        </div>
+        {% for c in champions %}
+          <div class="trow">
+            <div class="rank">{{ loop.index }}</div>
+            <div class="name">{{ c.name }}</div>
+            <div class="amount">{{ c.amount_cents|usd }}</div>
+            <div>{{ c.start_time.strftime("%Y-%m-%d") }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="card center">
+        <p>No one has closed out a round yet. Be the first to pay the $20 ceiling and claim the title.</p>
+      </div>
+    {% endif %}
+  </section>
 {% endblock %}
