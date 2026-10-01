@@ -1,12 +1,77 @@
 {% extends "layout.html" %}
+
+{% block title %}{% if outcome == "won" %}I'm the Penny Celebrity 🎉{% else %}Penny Celebrity{% endif %}{% endblock %}
+{% block og_title %}{{ self.title() }}{% endblock %}
+{% block og_description %}{% if outcome == "won" %}{{ celeb.name }} just became the Penny Celebrity for {{ celeb.amount_cents|usd }}. Think you can steal it?{% else %}Pay one cent more than the last person to become the Penny Celebrity.{% endif %}{% endblock %}
+
 {% block content %}
   <div class="card center">
-    <span class="eyebrow-top">Payment received</span>
-    <h1>You're in the spotlight 🎉</h1>
-    <p>If your payment landed at the current price, you're now the Penny Celebrity! It can take a few seconds to show up on the homepage.</p>
+    {% if outcome == "won" %}
+      <span class="eyebrow-top">Payment confirmed</span>
+      <h1>You're in the spotlight 🎉</h1>
+      <p>
+        You're now the Penny Celebrity as <strong>{{ celeb.name }}</strong>, claimed for {{ celeb.amount_cents|usd }}.
+        It can take a few seconds to show up everywhere on the site.
+      </p>
+      <div>
+        <button class="btn" id="shareBtn" type="button">Share your win →</button>
+      </div>
+
+    {% elif outcome == "refunded" %}
+      <span class="eyebrow-top">So close</span>
+      <h1>Someone beat you to it</h1>
+      <p>
+        Another payment landed a split-second before yours at the same price. You have <strong>not been charged</strong> —
+        your payment was automatically refunded. Feel free to try again at the new price.
+      </p>
+
+    {% elif outcome == "pending" %}
+      <span class="eyebrow-top">Almost there</span>
+      <h1>Confirming your payment…</h1>
+      <p>
+        Stripe says your payment went through, and we're just finishing confirming it on our end — this
+        can take a few extra seconds under heavy traffic. Refresh this page in a moment, or check the homepage.
+      </p>
+
+    {% else %}
+      <span class="eyebrow-top">Hmm</span>
+      <h1>We couldn't find that payment</h1>
+      <p>
+        If you just completed checkout, this link may have been opened without its payment details.
+        Check the homepage to see who currently holds the spotlight.
+      </p>
+    {% endif %}
+
     <div>
       <a class="btn" href="/">Go to Homepage</a>
       <a class="btn ghost" href="/leaderboard">View Leaderboard</a>
     </div>
   </div>
+
+  {% if outcome == "won" %}
+    <script>
+      // Web Share API on mobile (native share sheet); falls back to opening
+      // a pre-filled X/Twitter post on desktop or unsupported browsers.
+      (function(){
+        const btn = document.getElementById('shareBtn');
+        if (!btn) return;
+        const text = {{ ("I just paid " ~ celeb.amount_cents|usd ~ " to become the Penny Celebrity 👑 Think you can steal my spot?")|tojson }};
+        const url = {{ site_url|tojson }};
+        btn.addEventListener('click', async function(){
+          if (navigator.share) {
+            try {
+              await navigator.share({ text: text, url: url });
+              return;
+            } catch (e) {
+              // User cancelled the native share sheet, or it errored — fall
+              // through to the Twitter-intent fallback below rather than
+              // doing nothing.
+            }
+          }
+          const tweetUrl = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text) + '&url=' + encodeURIComponent(url);
+          window.open(tweetUrl, '_blank', 'noopener');
+        });
+      })();
+    </script>
+  {% endif %}
 {% endblock %}
