@@ -3,9 +3,26 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="Pay one cent more than the last person to become the Penny Celebrity. The price only goes up." />
-  <title>Penny Celebrity — steal the spotlight for a penny more</title>
+  <meta name="description" content="{% block description %}Pay one cent more than the last person to become the Penny Celebrity. The price only goes up.{% endblock %}" />
+  <title>{% block title %}Penny Celebrity — steal the spotlight for a penny more{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%B0%3C/text%3E%3C/svg%3E">
+
+  <!-- Social share previews. og:image is a live-generated PNG showing
+       whoever currently holds the spotlight, so any shared link — not
+       just the homepage — carries a real, current preview instead of a
+       blank/generic card. See /og-image.png in app.py. -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Penny Celebrity" />
+  <meta property="og:title" content="{% block og_title %}Penny Celebrity — steal the spotlight for a penny more{% endblock %}" />
+  <meta property="og:description" content="{% block og_description %}Pay one cent more than the last person to become the Penny Celebrity. The price only goes up.{% endblock %}" />
+  <meta property="og:image" content="{{ site_url }}/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:url" content="{{ site_url }}{{ request.path }}" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="{{ self.og_title() }}" />
+  <meta name="twitter:description" content="{{ self.og_description() }}" />
+  <meta name="twitter:image" content="{{ site_url }}/og-image.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
