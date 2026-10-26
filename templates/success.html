@@ -17,12 +17,13 @@
         <button class="btn" id="shareBtn" type="button">Share your win →</button>
       </div>
 
-    {% elif outcome == "refunded" %}
+    {% elif outcome == "released" %}
       <span class="eyebrow-top">So close</span>
       <h1>Someone beat you to it</h1>
       <p>
         Another payment landed a split-second before yours at the same price. You have <strong>not been charged</strong> —
-        your payment was automatically refunded. Feel free to try again at the new price.
+        the hold on your card has been released. Your bank may show it as pending for a few days before it disappears.
+        Feel free to try again at the new price.
       </p>
 
     {% elif outcome == "pending" %}
