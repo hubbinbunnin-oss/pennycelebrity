@@ -448,9 +448,8 @@ def create_checkout_session():
         if lock_until and now_utc() < lock_until:
             # Reject before Stripe is even involved: the current champion
             # is under their guaranteed hold, so this payment would just
-            # get refunded anyway (see /webhook). Blocking it here saves
-            # the payer a pointless charge-then-refund round trip and the
-            # site the Stripe processing fee on a doomed payment.
+            # be released anyway (see /webhook). Blocking it here spares
+            # the payer a pointless hold on their card.
             remaining_min = max(1, int((lock_until - now_utc()).total_seconds() // 60) + 1)
             return jsonify(error=f"The current champion is protected for about {remaining_min} more "
                                   f"minute(s) — try again after that."), 409
@@ -473,6 +472,12 @@ def create_checkout_session():
                 "raw_name": raw_name,
                 "expected_amount_cents": str(amount_cents),
             },
+            # Authorize only — don't charge yet. The webhook decides who
+            # actually won the price, captures (charges) that one payment,
+            # and cancels everyone else's hold. A cancelled hold is never a
+            # charge, so race losers pay nothing and the site pays no Stripe
+            # fee on them (a refund, by contrast, keeps the fee).
+            payment_intent_data={"capture_method": "manual"},
             success_url=f"{SITE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{SITE_URL}/cancel",
             allow_promotion_codes=False,
@@ -516,10 +521,20 @@ def success():
                     outcome = "won"
                     break
                 try:
-                    refunds = stripe.Refund.list(payment_intent=payment_intent_id, limit=1)
-                    if refunds.data:
-                        outcome = "refunded"
+                    pi = stripe.PaymentIntent.retrieve(payment_intent_id)
+                    if pi.status == "canceled":
+                        # Lost the race (or hit a protected champion): the
+                        # hold was released and the card was never charged.
+                        outcome = "released"
                         break
+                    if pi.status == "succeeded":
+                        # Only possible for checkouts started before the
+                        # switch to holds, which were charged up front and
+                        # refunded if they lost.
+                        refunds = stripe.Refund.list(payment_intent=payment_intent_id, limit=1)
+                        if refunds.data:
+                            outcome = "released"
+                            break
                 except Exception:
                     pass
                 if attempt < 5:
@@ -530,6 +545,24 @@ def success():
 @app.get("/cancel")
 def cancel():
     return render_template("cancel.html")
+
+def _release_payment(payment_intent_id: str, status: str, reason: str) -> None:
+    # Give a losing payer their money back in whatever way their payment's
+    # state allows. Normally that's cancelling the hold, which costs nobody
+    # anything. "succeeded" only happens for a checkout created before the
+    # switch to holds (already charged), so that one still needs a refund.
+    # Idempotency keys make a redelivered webhook safe to process again.
+    if status == "requires_capture":
+        stripe.PaymentIntent.cancel(
+            payment_intent_id,
+            idempotency_key=f"cancel-{reason}-{payment_intent_id}",
+        )
+    elif status == "succeeded":
+        stripe.Refund.create(
+            payment_intent=payment_intent_id,
+            idempotency_key=f"refund-{reason}-{payment_intent_id}",
+        )
+    # "canceled" (already released, or the hold expired) needs nothing.
 
 @app.post("/webhook")
 def webhook():
@@ -554,20 +587,41 @@ def webhook():
         display_name = meta.get("display_name", "") or "Anonymous"
         expected_amount = int(meta.get("expected_amount_cents") or 0)
 
-        # Double-check payment intent status
+        # Checkouts now only place a hold, so a completed one normally sits
+        # at "requires_capture". "succeeded" can still arrive for a checkout
+        # started before this change (charged up front); "canceled" means
+        # the hold was already released or expired, so there's nothing to do.
         pi = stripe.PaymentIntent.retrieve(payment_intent_id)
-        if pi.status != "succeeded":
-            # ignore non-succeeded
+        pi_status = pi.status
+        if pi_status == "canceled":
+            return "already released", 200
+        if pi_status not in ("requires_capture", "succeeded"):
             return "ignored", 200
 
         with Session(engine) as sess:
+            def is_recorded_winner() -> bool:
+                return sess.execute(
+                    select(Celebrity.id).where(Celebrity.stripe_payment_intent == payment_intent_id)
+                ).scalars().first() is not None
+
+            def release(reason: str):
+                # Re-check right before giving money back. Stripe can deliver
+                # the same event twice at once: copy 1 wins and commits, and
+                # copy 2 — which passed the check below a moment earlier —
+                # then sees the price already moved (or the champion lock it
+                # just set) and would otherwise release the WINNER's payment.
+                # The win and the price change commit together, so if the
+                # price has moved because of this very payment, its row is
+                # visible here.
+                if is_recorded_winner():
+                    return "already processed", 200
+                _release_payment(payment_intent_id, pi_status, reason)
+                return f"released ({reason})", 200
+
             # Idempotency: Stripe can and does redeliver webhooks (retries,
             # timeouts, manual resends). If we've already recorded a win for
             # this payment intent, don't process it again.
-            already = sess.execute(
-                select(Celebrity.id).where(Celebrity.stripe_payment_intent == payment_intent_id)
-            ).scalars().first()
-            if already:
+            if is_recorded_winner():
                 return "already processed", 200
 
             s = get_or_create_settings(sess)
@@ -578,23 +632,14 @@ def webhook():
                 # Server-side backstop for the champion's guaranteed hold.
                 # /create-checkout-session already blocks new attempts while
                 # locked, but a Checkout session started just before the
-                # lock began can still complete after it started — refund
+                # lock began can still complete after it started — release
                 # it here rather than let it dethrone a protected champion.
-                stripe.Refund.create(
-                    payment_intent=payment_intent_id,
-                    idempotency_key=f"refund-protected-{payment_intent_id}",
-                )
-                return "refunded - champion protected", 200
+                return release("protected")
 
             if amount_total != current_required:
-                # Amount mismatch -> refund. The idempotency key means a
-                # redelivered webhook for the same payment intent can't
-                # trigger a second refund attempt.
-                stripe.Refund.create(
-                    payment_intent=payment_intent_id,
-                    idempotency_key=f"refund-mismatch-{payment_intent_id}",
-                )
-                return "refunded due to race", 200
+                # Paid a price that's no longer current (someone else got
+                # there first, or the page was stale) -> release.
+                return release("mismatch")
 
             # If this claim hits the ceiling, the ladder resets back to the
             # floor for whoever claims next, instead of climbing forever —
@@ -620,12 +665,11 @@ def webhook():
                         champion_lock_until=new_lock_until)
             )
             if result.rowcount == 0:
-                stripe.Refund.create(
-                    payment_intent=payment_intent_id,
-                    idempotency_key=f"refund-race-{payment_intent_id}",
-                )
-                sess.commit()
-                return "refunded due to race", 200
+                # Lost the race. End the (empty) write transaction before
+                # calling Stripe, so this loser doesn't hold the database
+                # write lock while it waits on the network.
+                sess.rollback()
+                return release("race")
 
             # Close current celeb (if any)
             current = sess.execute(
@@ -647,6 +691,19 @@ def webhook():
             sess.add(c)
 
             try:
+                sess.flush()
+                # Only now — with the win decided and staged but not yet
+                # committed — is the winner actually charged. If the capture
+                # fails, nothing is committed: no crown, price unchanged, and
+                # the 500 makes Stripe retry this webhook later, when the
+                # same logic runs again from the payment's fresh state
+                # (capture again, crown if it already captured, or release if
+                # someone else has won in the meantime).
+                if pi_status == "requires_capture":
+                    stripe.PaymentIntent.capture(
+                        payment_intent_id,
+                        idempotency_key=f"capture-{payment_intent_id}",
+                    )
                 sess.commit()
             except IntegrityError:
                 # Belt-and-suspenders: a second delivery of the same event
@@ -654,6 +711,12 @@ def webhook():
                 # this commit, and tripped the unique index instead.
                 sess.rollback()
                 return "already processed", 200
+            except Exception:
+                # Capture (or the commit) failed. Nothing is saved; a 500
+                # tells Stripe to redeliver this webhook later.
+                sess.rollback()
+                app.logger.exception("Winner capture failed for %s; Stripe will retry", payment_intent_id)
+                return "capture failed, will retry", 500
 
         return "ok", 200
 
